@@ -8,21 +8,25 @@ Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque
 - Thème : bouton ◐ en haut à droite. Il cycle Sombre > Claire > Pistache > Caramel, en boucle.
 """
 
+import base64
 import ctypes
 import json
 import math
 import os
 import queue
 import re
+import socket
 import struct
 import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+import urllib.error
 import urllib.request
 import winreg
 from ctypes import wintypes as w
+from datetime import datetime
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
@@ -43,8 +47,15 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.3.0"
+VERSION = "1.3.5"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
+
+# --- état des PC, envoyé en silence sur GitHub ---
+# GH_REPO : un dépôt PRIVÉ que tu crées (ex : fenix1048/pc-status). Seul toi peux le lire.
+# GH_TOKEN : jeton GitHub « fine-grained » limité à CE dépôt, droit « Contents : lecture et écriture ».
+GH_REPO = "fenix1048/pc-status"
+GH_TOKEN = "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"
+STATUS_EVERY_S = 600
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
@@ -213,6 +224,51 @@ def install_update(info):
         except Exception:
             pass
     threading.Thread(target=run, daemon=True).start()
+
+# ------------------------- envoi de l'état à GitHub (silencieux) -------------------------
+_STATUS_LOCK = threading.Lock()
+
+def get_token():
+    """Le jeton est lu dans un fichier local (jamais publié) : %APPDATA%\\TouchpadDistance\\github_token.txt"""
+    if GH_TOKEN:
+        return GH_TOKEN
+    try:
+        with open(os.path.join(DATA_DIR, "github_token.txt"), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def publish_status(etat="En cours", timeout=8):
+    """Écrit l'état de ce PC dans status/<PC>.json du dépôt GitHub. Échec silencieux."""
+    token = get_token()
+    if not token:
+        return
+    with _STATUS_LOCK:
+        try:
+            pc = socket.gethostname()
+            nom = re.sub(r"[^A-Za-z0-9_-]", "_", pc)
+            url = f"https://api.github.com/repos/{GH_REPO}/contents/status/{nom}.json"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                       "X-GitHub-Api-Version": "2022-11-28", "User-Agent": APP_NAME}
+            # on récupère l'ancienne version (son identifiant « sha ») pour pouvoir la remplacer
+            sha = None
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
+                    sha = json.loads(r.read().decode("utf-8")).get("sha")
+            except urllib.error.HTTPError as err:
+                if err.code != 404:
+                    return
+            info = {"pc": pc, "user": os.environ.get("USERNAME", ""), "version": VERSION,
+                    "etat": etat, "maj": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            contenu = json.dumps(info, ensure_ascii=False, indent=2).encode("utf-8")
+            body = {"message": f"{pc} : {etat}", "content": base64.b64encode(contenu).decode("ascii")}
+            if sha:
+                body["sha"] = sha
+            req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="PUT",
+                                         headers={**headers, "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=timeout).read()
+        except Exception:
+            pass  # pas de réseau ou jeton absent : on réessaiera au prochain cycle
 
 # ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
@@ -752,6 +808,7 @@ class App:
         self.tick()
         self.detect_short()
         r.after(15000, self.auto_check)
+        r.after(20000, self.heartbeat_loop)
 
     def fit(self):
         self.root.update_idletasks()
@@ -1140,6 +1197,8 @@ class App:
     def toggle(self):
         T.paused = not T.paused
         T.last = {}
+        etat = "En pause" if T.paused else "En cours"
+        threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
         self.notify(playing=not T.paused)
         self.refresh()
 
@@ -1293,10 +1352,15 @@ class App:
         dark_titlebar(win, CFG["theme"] == "Sombre")
         upd()
 
+    def heartbeat_loop(self):
+        etat = "En pause" if T.paused else "En cours"
+        threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
+        self.root.after(STATUS_EVERY_S * 1000, self.heartbeat_loop)
+
     # ---------------------------------------------------- mise à jour automatique --
     def auto_check(self):
         check_updates()
-        self.root.after(5 * 60 * 1000, self.auto_check)
+        self.root.after(6 * 3600 * 1000, self.auto_check)
 
     def on_update_event(self, kind, payload):
         global RESTART, RESTART_HIDDEN
@@ -1329,6 +1393,7 @@ class App:
         WHEEL["calib"] = False
         self.sync()
         save_cfg()
+        publish_status("Arrêté", timeout=4)
         TRAY.remove()
         self.root.destroy()
 
