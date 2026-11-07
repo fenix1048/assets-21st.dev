@@ -1360,7 +1360,7 @@ class App:
     # ---------------------------------------------------- mise à jour automatique --
     def auto_check(self):
         check_updates()
-        self.root.after(6 * 3600 * 1000, self.auto_check)
+        self.root.after(5 * 60 * 1000, self.auto_check)
 
     def on_update_event(self, kind, payload):
         global RESTART, RESTART_HIDDEN
