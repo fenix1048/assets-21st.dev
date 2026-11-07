@@ -47,14 +47,12 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
-# --- état des PC, envoyé en silence sur GitHub ---
-# GH_REPO : un dépôt PRIVÉ que tu crées (ex : fenix1048/pc-status). Seul toi peux le lire.
-# GH_TOKEN : jeton GitHub « fine-grained » limité à CE dépôt, droit « Contents : lecture et écriture ».
-GH_REPO = "fenix1048/pc-status"
-GH_TOKEN = "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"
+# --- état des PC, envoyé à ta feuille Google (privée) ---
+# SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
+SHEET_URL = "https://script.google.com/macros/s/AKfycby8OLLWPjYRC9Dd8ajY3kYBQtDKPz2L3ibQ3XI6l8ncCL4jXX-p2qLwU0XTms15vn9Z/exec"
 STATUS_EVERY_S = 600
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
@@ -225,50 +223,19 @@ def install_update(info):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# ------------------------- envoi de l'état à GitHub (silencieux) -------------------------
-_STATUS_LOCK = threading.Lock()
-
-def get_token():
-    """Le jeton est lu dans un fichier local (jamais publié) : %APPDATA%\\TouchpadDistance\\github_token.txt"""
-    if GH_TOKEN:
-        return GH_TOKEN
-    try:
-        with open(os.path.join(DATA_DIR, "github_token.txt"), "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except OSError:
-        return ""
-
+# ------------------------- envoi de l'état à la feuille (silencieux) -------------------------
 def publish_status(etat="En cours", timeout=8):
-    """Écrit l'état de ce PC dans status/<PC>.json du dépôt GitHub. Échec silencieux."""
-    token = get_token()
-    if not token:
+    """Envoie l'état de ce PC à la feuille Google. Échec silencieux."""
+    if not SHEET_URL.startswith("https://") or "COLLE_ICI" in SHEET_URL:
         return
-    with _STATUS_LOCK:
-        try:
-            pc = socket.gethostname()
-            nom = re.sub(r"[^A-Za-z0-9_-]", "_", pc)
-            url = f"https://api.github.com/repos/{GH_REPO}/contents/status/{nom}.json"
-            headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-                       "X-GitHub-Api-Version": "2022-11-28", "User-Agent": APP_NAME}
-            # on récupère l'ancienne version (son identifiant « sha ») pour pouvoir la remplacer
-            sha = None
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
-                    sha = json.loads(r.read().decode("utf-8")).get("sha")
-            except urllib.error.HTTPError as err:
-                if err.code != 404:
-                    return
-            info = {"pc": pc, "user": os.environ.get("USERNAME", ""), "version": VERSION,
-                    "etat": etat, "maj": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            contenu = json.dumps(info, ensure_ascii=False, indent=2).encode("utf-8")
-            body = {"message": f"{pc} : {etat}", "content": base64.b64encode(contenu).decode("ascii")}
-            if sha:
-                body["sha"] = sha
-            req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="PUT",
-                                         headers={**headers, "Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=timeout).read()
-        except Exception:
-            pass  # pas de réseau ou jeton absent : on réessaiera au prochain cycle
+    try:
+        info = {"pc": socket.gethostname(), "user": os.environ.get("USERNAME", ""),
+                "version": VERSION, "etat": etat}
+        req = urllib.request.Request(SHEET_URL, data=json.dumps(info).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=timeout).read()
+    except Exception:
+        pass
 
 # ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
