@@ -47,7 +47,7 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.3.5"
+VERSION = "1.4.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé en silence sur GitHub ---
