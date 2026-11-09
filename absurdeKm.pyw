@@ -48,12 +48,12 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
 # SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
-SHEET_URL = "https://script.google.com/macros/s/AKfycby8OLLWPjYRC9Dd8ajY3kYBQtDKPz2L3ibQ3XI6l8ncCL4jXX-p2qLwU0XTms15vn9Z/exec"
+SHEET_URL = "https://script.google.com/macros/s/AKfycbyqKi256_H8jeHgUPx1r9n_V18rJiWIYJUBa0-a_V88yigVvr8VsfHWE_O3ETA41Gt6/exec"
 STATUS_EVERY_S = 600
 
 # --- captures d'écran à la demande depuis Google Sheets ---
