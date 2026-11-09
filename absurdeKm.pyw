@@ -1,4 +1,8 @@
 """
+AbsurdeKm
+Copyright (c) 2026 Fénix842/Fénix1048. Tous droits réservés.
+Ce logiciel ne peut être copié, modifié ou redistribué sans l'autorisation écrite de l'auteur.
+
 absurdeKm (Windows) - distance du pavé tactile, distance de la molette, shorts vus bout à bout.
 
 Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque standard uniquement).
@@ -48,7 +52,7 @@ EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
 # --- version et mise à jour ---
-VERSION = "1.4.5"
+VERSION = "1.5.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
