@@ -37,7 +37,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
 # ------------------------- réglages -------------------------
-APP_NAME = "absurdeKm"
+APP_NAME = "absurdKm"
 DATA_FOLDER = "TouchpadDistance"       # on garde l'ancien dossier pour retrouver tes données
 DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.dirname(os.path.abspath(__file__))), DATA_FOLDER)
 CFG_FILE = os.path.join(DATA_DIR, "config.json")
@@ -51,21 +51,18 @@ PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la mole
 EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
-# --- captures d'écran ---
 SHOT_MAX_W = 2560                      # définition max de la capture envoyée (pixels)
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-# --- version et mise à jour ---
-VERSION = "1.6.9"
+VERSION = "1.7.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
 # SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
-SHEET_URL = "https://script.google.com/macros/s/AKfycbyqKi256_H8jeHgUPx1r9n_V18rJiWIYJUBa0-a_V88yigVvr8VsfHWE_O3ETA41Gt6/exec"
+SHEET_URL = "https://script.google.com/macros/s/AKfycbwZinF32_waWLOHoH-1JzLNRYKq4bqGJUIKiCqFqD9y1MvrdH-zSoco6hUowpsEGZDH/exec"
 STATUS_EVERY_S = 600
 
-# --- captures d'écran à la demande depuis Google Sheets ---
 # Remplace cette valeur par EXACTEMENT la même dans le Google Apps Script.
 CAPTURE_TOKEN = "8zBMhaK_2ntLj_hqEHPOVRJ0Xt7EbffyYpmrSmWC57c"
 CAPTURE_POLL_S = 8
