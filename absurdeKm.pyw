@@ -57,7 +57,7 @@ SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
 # --- version et mise à jour ---
-VERSION = "1.6.0"
+VERSION = "1.6.2"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
@@ -903,6 +903,7 @@ class App:
         self.tab = "Pavé"
         self._job = None
         self._was_down = False
+        self._space_was_down = False
         self._ui = self._save = self._tip = 0.0
         self._pill_state = None
         self.wiz = None
@@ -1613,6 +1614,10 @@ class App:
         if down and not self._was_down:
             self.toggle()
         self._was_down = bool(down)
+        space_down = bool(user32.GetAsyncKeyState(0x20) & 0x8000)
+        if space_down and not self._space_was_down and MT.cal:
+            self.toggle_mouse_calib()
+        self._space_was_down = space_down
         while True:
             try:
                 c = CMDS.get_nowait()
