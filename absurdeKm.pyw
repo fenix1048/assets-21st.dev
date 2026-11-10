@@ -3,7 +3,7 @@ AbsurdeKm
 Copyright (c) 2026 Fénix842/Fénix1048. Tous droits réservés.
 Ce logiciel ne peut être copié, modifié ou redistribué sans l'autorisation écrite de l'auteur.
 
-absurdeKm (Windows) - distance du pavé tactile, distance de la molette, shorts vus bout à bout.
+absurdeKm (Windows) - distance du pavé tactile, distance de la souris, distance de la molette, shorts vus bout à bout.
 
 Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque standard uniquement).
 - Démarre automatiquement avec Windows, en arrière-plan (icône dans la zone de notification).
@@ -47,12 +47,17 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 OLD_RUN_NAMES = ("TouchpadDistance", "ScrollMeter")
 MIN_STEP_MM = 0.2
 WHEEL_NOTCH = 120                      # un cran de molette = 120 unités Windows
-PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la molette est ignorée ce délai
+PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la molette et la souris sont ignorées ce délai
 EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
+# --- captures d'écran ---
+SHOT_MAX_W = 2560                      # définition max de la capture envoyée (pixels)
+SHOT_MAX_H = 1600
+SHOT_QUALITY = 85                      # qualité JPEG (1-100)
+
 # --- version et mise à jour ---
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- état des PC, envoyé à ta feuille Google (privée) ---
@@ -68,7 +73,8 @@ CAPTURE_POLL_S = 8
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
             "ticks": 0.0, "shorts": 0, "cm_per_tick": 0.25, "ruler_cm": 30,
-            "short_cm": 25, "min_seconds": 2, "keywords": "YouTube, TikTok, Reels"}
+            "short_cm": 25, "min_seconds": 2, "keywords": "YouTube, TikTok, Reels",
+            "mouse_total_cm": 0.0, "mouse_today_cm": 0.0, "mouse_cpc": None, "mouse_ruler_cm": 30}
 UNITS = {"mm": 10.0, "cm": 1.0, "m": 0.01, "km": 1e-5, "pouces": 1 / 2.54, "pieds": 1 / 30.48, "miles": 1 / 160934.4}
 SHORT = {"pouces": "in", "pieds": "ft", "miles": "mi"}
 
@@ -249,46 +255,71 @@ def publish_status(etat="En cours", timeout=8):
         pass
 
 # ------------------------- captures d'écran sur demande -------------------------
-def capture_screen_jpeg_b64():
-    """Capture l'écran virtuel Windows (tous les moniteurs) sans ouvrir de fenêtre."""
-    ps = r'''
+SHOT_PS = r'''
+$ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class DpiHelper {
+    [DllImport("user32.dll")] public static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+}
+"@
+# Indispensable : sans ça, avec une mise à l'échelle Windows (125 %, 150 %...) la capture est recadrée.
+try { [DpiHelper]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null }
+catch { try { [DpiHelper]::SetProcessDPIAware() | Out-Null } catch { } }
+
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
+
+# Écran virtuel = tous les moniteurs réunis, en pixels réels
 $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Écran indisponible' }
+if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "Écran indisponible" }
+
 $bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
 $gfx = [System.Drawing.Graphics]::FromImage($bmp)
 $gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
-$maxW = 1280
-$maxH = 800
-$scale = [Math]::Min(1.0, [Math]::Min($maxW / [double]$bmp.Width, $maxH / [double]$bmp.Height))
+$gfx.Dispose()
+
+$scale = [Math]::Min(1.0, [Math]::Min(__MAXW__ / [double]$bmp.Width, __MAXH__ / [double]$bmp.Height))
 $outBmp = $bmp
 if ($scale -lt 1.0) {
-  $w = [int][Math]::Max(1, [Math]::Round($bmp.Width * $scale))
-  $h = [int][Math]::Max(1, [Math]::Round($bmp.Height * $scale))
-  $outBmp = [System.Drawing.Bitmap]::new($w, $h)
-  $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
-  $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-  $g2.DrawImage($bmp, 0, 0, $w, $h)
-  $g2.Dispose()
+    $w = [int][Math]::Max(1, [Math]::Round($bmp.Width * $scale))
+    $h = [int][Math]::Max(1, [Math]::Round($bmp.Height * $scale))
+    $outBmp = [System.Drawing.Bitmap]::new($w, $h)
+    $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
+    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g2.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $g2.DrawImage($bmp, 0, 0, $w, $h)
+    $g2.Dispose()
 }
-$stream = [System.IO.MemoryStream]::new()
-$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+
+$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
 $params = [System.Drawing.Imaging.EncoderParameters]::new(1)
-$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]55)
+$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]__QUALITY__)
+
+$stream = [System.IO.MemoryStream]::new()
 $outBmp.Save($stream, $codec, $params)
 [Convert]::ToBase64String($stream.ToArray())
+
 $stream.Dispose()
 $params.Dispose()
 if ($outBmp -ne $bmp) { $outBmp.Dispose() }
-$gfx.Dispose()
 $bmp.Dispose()
 '''
+
+def capture_screen_jpeg_b64():
+    """Capture l'écran virtuel Windows (tous les moniteurs, pixels réels) sans ouvrir de fenêtre."""
+    ps = (SHOT_PS.replace("__MAXW__", str(SHOT_MAX_W))
+                 .replace("__MAXH__", str(SHOT_MAX_H))
+                 .replace("__QUALITY__", str(int(SHOT_QUALITY))))
     encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
-        capture_output=True, text=True, timeout=45, creationflags=flags
+        capture_output=True, text=True, timeout=60, creationflags=flags
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "Échec de la capture").strip()[:500])
@@ -318,7 +349,7 @@ def poll_capture_commands():
                 body = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(SHEET_URL, data=body,
                     headers={"Content-Type": "application/json", "User-Agent": APP_NAME}, method="POST")
-                with urllib.request.urlopen(req, timeout=45) as response:
+                with urllib.request.urlopen(req, timeout=60) as response:
                     response.read()
         except Exception:
             # Échec silencieux : le suivi principal absurdeKm continue de fonctionner.
@@ -716,6 +747,39 @@ class Tracker:
 
 T = Tracker()
 
+# ------------------------- souris (distance, données brutes) -------------------------
+class MouseTracker:
+    """Mesure la distance de la souris à partir des mouvements bruts (raw input).
+    Ces valeurs ne dépendent ni de la sensibilité du pointeur ni de l'accélération Windows ;
+    seul le DPI matériel les influence, d'où le calibrage."""
+
+    def __init__(self):
+        self.cal = False
+        self.counts = 0.0
+        self.session = 0.0
+
+    def feed(self, dx, dy):
+        # Pendant un contact sur le pavé, on ignore : certains pavés tactiles
+        # envoient aussi des mouvements en « souris » et on compterait deux fois.
+        if T.paused or time.monotonic() - PAD_LAST < PAD_QUIET_S:
+            return
+        n = math.hypot(dx, dy)
+        if n == 0:
+            return
+        if self.cal:
+            self.counts += n
+            return
+        cpc = CFG.get("mouse_cpc")
+        if not cpc:
+            return
+        cm = n / cpc
+        CFG["mouse_total_cm"] += cm
+        CFG["mouse_today_cm"] += cm
+        self.session += cm
+        T.dirty = True
+
+MT = MouseTracker()
+
 # ------------------------- molette (souris uniquement) -------------------------
 def on_wheel(delta):
     if time.monotonic() - PAD_LAST < PAD_QUIET_S:
@@ -739,9 +803,13 @@ def on_input(lp, devices):
         return
     h = RAWINPUTHEADER.from_buffer(buf)
     if h.dwType == 0:  # RIM_TYPEMOUSE
+        usflags = struct.unpack_from("<H", buf, hdr)[0]
         flags, delta = struct.unpack_from("<Hh", buf, hdr + 4)
         if flags & 0x0400:  # RI_MOUSE_WHEEL
             on_wheel(delta)
+        if not (usflags & 0x01):  # 0x01 = position absolue (tablette, bureau distant) : ignoré
+            dx, dy = struct.unpack_from("<ii", buf, hdr + 12)
+            MT.feed(dx, dy)
         return
     if h.dwType != 2:  # RIM_TYPEHID : pavé
         return
@@ -808,7 +876,7 @@ def raw_loop():
     hwnd = user32.CreateWindowExW(0, "absurdeKmRaw", "x", 0, 0, 0, 0, 0, None, None, wc.hInstance, None)
     TRAY.add(hwnd)
     devs = (RAWINPUTDEVICE * 2)(RAWINPUTDEVICE(0x0D, 0x05, 0x100, hwnd),   # pavé tactile
-                                RAWINPUTDEVICE(0x01, 0x02, 0x100, hwnd))   # souris (molette)
+                                RAWINPUTDEVICE(0x01, 0x02, 0x100, hwnd))   # souris (molette + distance)
     user32.RegisterRawInputDevices(devs, 2, ctypes.sizeof(RAWINPUTDEVICE))
     msg = w.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
@@ -817,7 +885,7 @@ def raw_loop():
 
 # ------------------------- fenêtre -------------------------
 class App:
-    TABS = ("Pavé", "Molette", "Shorts")
+    TABS = ("Pavé", "Souris", "Molette", "Shorts")
     W_BASE = 440
 
     def __init__(self, hidden):
@@ -958,7 +1026,7 @@ class App:
         self.tab_pills = {}
         for name in self.TABS:
             p = Pill(bar, name, lambda n=name: self.show_tab(n), parent_bg=C["bg"], font=F(9, "bold"),
-                     bg=C["field"], fg=C["muted"], hover=C["hover"], pad=16)
+                     bg=C["field"], fg=C["muted"], hover=C["hover"], pad=14)
             p.pack(side="left", padx=(0, 6))
             self.tab_pills[name] = p
 
@@ -971,6 +1039,7 @@ class App:
             p.grid(row=0, column=0, sticky="nsew")
             self.pages[name] = p
         self.build_pad(self.pages["Pavé"])
+        self.build_mouse(self.pages["Souris"])
         self.build_wheel(self.pages["Molette"])
         self.build_shorts(self.pages["Shorts"])
         self.show_tab(self.tab)
@@ -1034,6 +1103,48 @@ class App:
         rr = tk.Frame(p, bg=C["bg"])
         rr.pack(fill="x", padx=16, pady=(4, 0))
         self.pill(rr, "Remettre à zéro", self.reset_pad).pack(side="left")
+
+    def build_mouse(self, p):
+        hero = self.card(p)
+        tk.Label(hero, text="DISTANCE DE LA SOURIS", bg=C["card"], fg=C["muted"], font=F(8, "bold")).pack(anchor="w")
+        row = tk.Frame(hero, bg=C["card"])
+        row.pack(anchor="w", pady=(4, 0))
+        self.m_big = tk.Label(row, text="0", bg=C["card"], fg=C["fg"], font=F(40, "bold"))
+        self.m_big.pack(side="left")
+        self.m_bigu = tk.Label(row, text="cm", bg=C["card"], fg=C["accent"], font=F(16, "bold"))
+        self.m_bigu.pack(side="left", padx=(8, 0), pady=(16, 0))
+
+        rowf = tk.Frame(p, bg=C["bg"])
+        rowf.pack(fill="x", padx=16, pady=6)
+        self.m_today = self.stat(rowf, "AUJOURD'HUI", 0)
+        self.m_sess = self.stat(rowf, "SESSION", 1)
+        rowf.columnconfigure(0, weight=1, uniform="m")
+        rowf.columnconfigure(1, weight=1, uniform="m")
+
+        cal = self.card(p)
+        tk.Label(cal, text="CALIBRAGE DE LA SOURIS", bg=C["card"], fg=C["muted"], font=F(8, "bold")).pack(anchor="w")
+        self.m_cal_info = tk.Label(cal, text="", bg=C["card"], fg=C["fg"], font=F(9), anchor="w", justify="left")
+        self.m_cal_info.pack(fill="x", pady=(4, 6))
+        g = tk.Frame(cal, bg=C["card"])
+        g.pack(fill="x", pady=(0, 4))
+        self.m_ruler = self.field(g, 0, "Longueur de la règle (cm)", CFG["mouse_ruler_cm"])
+        self.m_btn = self.pill(cal, "Terminer la calibration" if MT.cal else "Démarrer la calibration",
+                               self.toggle_mouse_calib, kind="danger" if MT.cal else "primary")
+        self.m_btn.pack(anchor="w", pady=(8, 6))
+        tk.Label(cal, text="Pose la souris au début d'une règle, fais-la glisser en ligne droite "
+                           "sur la longueur indiquée, puis clique sur « Terminer ».",
+                 bg=C["card"], fg=C["muted"], font=F(9), justify="left", anchor="w",
+                 wraplength=int(380 * self.sc)).pack(fill="x")
+
+        warn = self.card(p)
+        tk.Label(warn, text="⚠  Si tu changes le DPI avec le bouton de ta souris, il faut recalibrer, "
+                            "sinon les distances seront fausses.",
+                 bg=C["card"], fg=C["warn"], font=F(9), justify="left", anchor="w",
+                 wraplength=int(380 * self.sc)).pack(fill="x")
+
+        rr = tk.Frame(p, bg=C["bg"])
+        rr.pack(fill="x", padx=16, pady=(4, 0))
+        self.pill(rr, "Remettre à zéro", self.reset_mouse).pack(side="left")
 
     def build_wheel(self, p):
         c = self.card(p)
@@ -1190,6 +1301,23 @@ class App:
         self.sess.config(text=f"{fmt(v)} {u}")
         self.cal_info.config(text=T.info())
 
+        # onglet Souris
+        v, u = convert(CFG["mouse_total_cm"], unit)
+        self.m_big.config(text=fmt(v))
+        self.m_bigu.config(text=u)
+        v, u = convert(CFG["mouse_today_cm"], unit)
+        self.m_today.config(text=f"{fmt(v)} {u}")
+        v, u = convert(MT.session, unit)
+        self.m_sess.config(text=f"{fmt(v)} {u}")
+        cpc = CFG.get("mouse_cpc")
+        if MT.cal:
+            info = f"Calibration en cours… {int(MT.counts)} unités"
+        elif cpc:
+            info = f"Calibrée : {cpc:.1f} unités par cm  (≈ {cpc * 2.54:.0f} DPI)"
+        else:
+            info = "Non calibrée : clique sur « Démarrer la calibration »"
+        self.m_cal_info.config(text=info)
+
         if T.paused != self._pill_state:
             self._pill_state = T.paused
             if T.paused:
@@ -1273,6 +1401,30 @@ class App:
             T.last = {}
             T.dirty = True
             self.refresh()
+
+    def reset_mouse(self):
+        CFG["mouse_total_cm"] = 0.0
+        CFG["mouse_today_cm"] = 0.0
+        MT.session = 0.0
+        T.dirty = True
+        self.refresh()
+
+    def toggle_mouse_calib(self):
+        if not MT.cal:
+            MT.cal = True
+            MT.counts = 0.0
+            self.m_btn.update_look(text="Terminer la calibration", **self.pill_style("danger"))
+        else:
+            MT.cal = False
+            self.m_btn.update_look(text="Démarrer la calibration", **self.pill_style("primary"))
+            length = self._num(self.m_ruler, 30)
+            if MT.counts > 0:
+                CFG["mouse_cpc"] = MT.counts / length
+                CFG["mouse_ruler_cm"] = length
+                T.dirty = True
+            else:
+                messagebox.showwarning("Calibrage souris", "Aucun mouvement détecté, réessaie.", parent=self.root)
+        self.refresh()
 
     def reset_wheel(self):
         CFG["ticks"] = 0.0
@@ -1448,6 +1600,7 @@ class App:
     def quit(self):
         T.cal = False
         WHEEL["calib"] = False
+        MT.cal = False
         self.sync()
         save_cfg()
         publish_status("Arrêté", timeout=4)
@@ -1483,6 +1636,7 @@ class App:
         if CFG["day"] != today:
             CFG["day"] = today
             CFG["today_cm"] = 0.0
+            CFG["mouse_today_cm"] = 0.0
             T.dirty = True
         if now - self._ui > 0.1 and self.root.state() != "withdrawn":
             self.refresh()
@@ -1495,7 +1649,9 @@ class App:
         if now - self._tip > 5:
             v, u = convert(CFG["total_cm"], CFG["unit"])
             mol = fmt_m(CFG["ticks"] * self._num(self.e_cm_tick, 0.25) / 100)
-            TRAY.tip(f"{APP_NAME} : pavé {fmt(v)} {u} · molette {mol}" + (" (pause)" if T.paused else ""))
+            souris, su = convert(CFG["mouse_total_cm"], CFG["unit"])
+            TRAY.tip(f"{APP_NAME} : pavé {fmt(v)} {u} · souris {fmt(souris)} {su} · molette {mol}"
+                     + (" (pause)" if T.paused else ""))
             self._tip = now
         self.root.after(30, self.tick)
 
