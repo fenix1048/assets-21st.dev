@@ -55,7 +55,7 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.7.9"
+VERSION = "1.8.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
@@ -353,8 +353,6 @@ def list_folder(rel):
                 st = e.stat(follow_symlinks=False)
             except OSError:
                 continue
-            if getattr(st, "st_file_attributes", 0) & HIDDEN_ATTRS:
-                continue
             is_dir = e.is_dir(follow_symlinks=False)
             items.append({"name": e.name, "dir": is_dir,
                           "size": 0 if is_dir else st.st_size, "mtime": st.st_mtime})
@@ -369,8 +367,6 @@ def download_file(rel):
     if not os.path.isfile(target):
         raise FileNotFoundError("Fichier introuvable")
     st = os.stat(target)
-    if getattr(st, "st_file_attributes", 0) & HIDDEN_ATTRS:
-        raise PermissionError("Fichier caché")
     if st.st_size > DL_MAX:
         raise ValueError("Fichier trop gros (maximum 10 Mo)")
     with open(target, "rb") as f:
