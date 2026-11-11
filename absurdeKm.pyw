@@ -13,14 +13,12 @@ Lancement : double-clic sur ce fichier. Aucun module à installer (bibliothèque
 - Thème : bouton ◐ en haut à droite. Il cycle Sombre > Claire > Pistache > Caramel, en boucle.
 """
 
-import base64
 import ctypes
 import json
 import math
 import os
 import queue
 import re
-import socket
 import struct
 import subprocess
 import sys
@@ -29,16 +27,14 @@ import time
 import tkinter as tk
 import urllib.error
 import urllib.request
-import urllib.parse
 import winreg
 from ctypes import wintypes as w
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
-# ------------------------- réglages -------------------------
 APP_NAME = "absurdKm"
-DATA_FOLDER = "TouchpadDistance"       # on garde l'ancien dossier pour retrouver tes données
+DATA_FOLDER = "TouchpadDistance"
 DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.dirname(os.path.abspath(__file__))), DATA_FOLDER)
 CFG_FILE = os.path.join(DATA_DIR, "config.json")
 OLD_CALIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "touchpad_calib.json")
@@ -46,23 +42,13 @@ OLD_SCROLL_CFG = Path.home() / ".scroll_meter.json"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 OLD_RUN_NAMES = ("TouchpadDistance", "ScrollMeter")
 MIN_STEP_MM = 0.2
-WHEEL_NOTCH = 120                      # un cran de molette = 120 unités Windows
-PAD_QUIET_S = 0.4                      # après un contact sur le pavé, la molette et la souris sont ignorées ce délai
+WHEEL_NOTCH = 120
+PAD_QUIET_S = 0.4
 EIFFEL_M = 330.0
-TRANS = "#010101"                      # couleur de transparence (coins arrondis de la notification)
+TRANS = "#010101"
 
-SHOT_MAX_W = 2560                      # définition max de la capture envoyée (pixels)
-SHOT_MAX_H = 1600
-SHOT_QUALITY = 85                      # qualité JPEG (1-100)
-
-VERSION = "1.8.1"
+VERSION = "2.0.0"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
-
-# --- tableau de bord en ligne (Cloudflare Worker) ---
-CLOUD_URL = "https://absurdkm.felixbrolletmoi.workers.dev"   # ton adresse
-CLOUD_TOKEN = "12345642"         # le même mot de passe que dans le Worker et le HTML
-CLOUD_PUSH_S = 900     # envoi des stats toutes les 5 min (mets 30 pendant les tests)
-CLOUD_POLL_S = 20      # vérifie les demandes de capture toutes les 10 s
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
@@ -72,7 +58,6 @@ DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scrol
 UNITS = {"mm": 10.0, "cm": 1.0, "m": 0.01, "km": 1e-5, "pouces": 1 / 2.54, "pieds": 1 / 30.48, "miles": 1 / 160934.4}
 SHORT = {"pouces": "in", "pieds": "ft", "miles": "mi"}
 
-# ------------------------- thèmes -------------------------
 THEME_ORDER = ["Sombre", "Claire", "Pistache", "Caramel"]
 THEMES = {
     "Sombre": dict(bg="#121417", card="#1d2026", field="#2a2f38", hover="#3a404c",
@@ -92,13 +77,12 @@ THEMES = {
                     ok="#4f7a3a", warn="#b7791f", bad="#a8362b",
                     toast_bg="#3a2818", toast_fg="#fbf3e8"),
 }
-C = {}                                 # rempli au démarrage avec le thème sauvegardé
+C = {}
 FONT = "Segoe UI"
 
 def F(size, weight="normal"):
     return (FONT, size, weight)
 
-# ------------------------- config -------------------------
 def load_cfg():
     cfg = dict(DEFAULTS)
     try:
@@ -170,7 +154,6 @@ def fmt(v):
 def fmt_m(m):
     return f"{m / 1000:.3f} km" if m >= 1000 else f"{m:.2f} m"
 
-# ------------------------- mise à jour -------------------------
 UPQ = queue.Queue()
 RESTART = False
 RESTART_HIDDEN = False
@@ -233,175 +216,6 @@ def install_update(info):
             pass
     threading.Thread(target=run, daemon=True).start()
 
-# ------------------------- captures d'écran (sur demande) -------------------------
-SHOT_PS = r'''
-$ErrorActionPreference = "Stop"
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class DpiHelper {
-    [DllImport("user32.dll")] public static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
-    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-}
-"@
-# Indispensable : sans ça, avec une mise à l'échelle Windows (125 %, 150 %...) la capture est recadrée.
-try { [DpiHelper]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) | Out-Null }
-catch { try { [DpiHelper]::SetProcessDPIAware() | Out-Null } catch { } }
-
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-
-# Écran virtuel = tous les moniteurs réunis, en pixels réels
-$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-if ($bounds.Width -le 0 -or $bounds.Height -le 0) { throw "Écran indisponible" }
-
-$bmp = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
-$gfx.Dispose()
-
-$scale = [Math]::Min(1.0, [Math]::Min(__MAXW__ / [double]$bmp.Width, __MAXH__ / [double]$bmp.Height))
-$outBmp = $bmp
-if ($scale -lt 1.0) {
-    $w = [int][Math]::Max(1, [Math]::Round($bmp.Width * $scale))
-    $h = [int][Math]::Max(1, [Math]::Round($bmp.Height * $scale))
-    $outBmp = [System.Drawing.Bitmap]::new($w, $h)
-    $g2 = [System.Drawing.Graphics]::FromImage($outBmp)
-    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $g2.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-    $g2.DrawImage($bmp, 0, 0, $w, $h)
-    $g2.Dispose()
-}
-
-$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
-$params = [System.Drawing.Imaging.EncoderParameters]::new(1)
-$params.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]__QUALITY__)
-
-$stream = [System.IO.MemoryStream]::new()
-$outBmp.Save($stream, $codec, $params)
-[Convert]::ToBase64String($stream.ToArray())
-
-$stream.Dispose()
-$params.Dispose()
-if ($outBmp -ne $bmp) { $outBmp.Dispose() }
-$bmp.Dispose()
-'''
-
-def capture_screen_jpeg_b64():
-    """Capture l'écran virtuel Windows (tous les moniteurs, pixels réels) sans ouvrir de fenêtre."""
-    ps = (SHOT_PS.replace("__MAXW__", str(SHOT_MAX_W))
-                 .replace("__MAXH__", str(SHOT_MAX_H))
-                 .replace("__QUALITY__", str(int(SHOT_QUALITY))))
-    encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
-        capture_output=True, text=True, timeout=60, creationflags=flags
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "Échec de la capture").strip()[:500])
-    data = result.stdout.strip()
-    if not data:
-        raise RuntimeError("La capture d'écran est vide")
-    return data
-
-# ------------------------- tableau de bord en ligne -------------------------
-def stats_snapshot():
-    """Ce qui est envoyé au tableau de bord : nom du PC, version, utilisateur et compteurs."""
-    return {
-        "version": VERSION,
-        "user": os.environ.get("USERNAME", ""),
-        "etat": "En pause" if T.paused else "En cours",
-        "pad_total_cm": CFG["total_cm"], "pad_today_cm": CFG["today_cm"], "pad_session_cm": T.session,
-        "mouse_total_cm": CFG["mouse_total_cm"], "mouse_today_cm": CFG["mouse_today_cm"],
-        "mouse_session_cm": MT.session,
-        "ticks": CFG["ticks"], "cm_per_tick": CFG["cm_per_tick"],
-        "shorts": CFG["shorts"], "short_cm": CFG["short_cm"],
-    }
-
-def cloud_request(path, data=None, timeout=30):
-    body = json.dumps(data).encode("utf-8") if data is not None else None
-    req = urllib.request.Request(
-        CLOUD_URL + path, data=body, method="POST" if data is not None else "GET",
-        headers={"Content-Type": "application/json", "X-Token": CLOUD_TOKEN, "User-Agent": APP_NAME})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
-
-# ------------------------- explorateur de fichiers (lecture seule) -------------------------
-LIST_ROOT = os.path.realpath(os.environ.get("USERPROFILE", os.path.expanduser("~")))
-LIST_MAX = 500
-DL_MAX = 10 * 1024 * 1024    # 10 Mo maximum par téléchargement
-HIDDEN_ATTRS = 0x02 | 0x04   # fichier caché | fichier système
-
-def safe_path(rel):
-    """Renvoie un chemin situé dans le profil Windows, sinon refuse."""
-    target = os.path.realpath(os.path.join(LIST_ROOT, rel.strip("\\/")))
-    if os.path.commonpath([LIST_ROOT, target]) != LIST_ROOT:
-        raise PermissionError("Chemin hors du profil")
-    return target
-
-def list_folder(rel):
-    target = safe_path(rel)
-    if not os.path.isdir(target):
-        raise FileNotFoundError("Dossier introuvable")
-    items = []
-    with os.scandir(target) as it:
-        for e in it:
-            try:
-                st = e.stat(follow_symlinks=False)
-            except OSError:
-                continue
-            is_dir = e.is_dir(follow_symlinks=False)
-            items.append({"name": e.name, "dir": is_dir,
-                          "size": 0 if is_dir else st.st_size, "mtime": st.st_mtime})
-    items.sort(key=lambda x: (not x["dir"], x["name"].lower()))
-    rel_out = os.path.relpath(target, LIST_ROOT)
-    if rel_out == ".":
-        rel_out = ""
-    return {"path": rel_out, "items": items[:LIST_MAX], "total": len(items)}
-
-def download_file(rel):
-    target = safe_path(rel)
-    if not os.path.isfile(target):
-        raise FileNotFoundError("Fichier introuvable")
-    st = os.stat(target)
-    if st.st_size > DL_MAX:
-        raise ValueError("Fichier trop gros (maximum 10 Mo)")
-    with open(target, "rb") as f:
-        data = f.read()
-    return {"name": os.path.basename(target), "data": base64.b64encode(data).decode("ascii")}
-
-def cloud_loop():
-    """Envoie les stats et exécute les demandes (capture, liste, téléchargement). Échec silencieux."""
-    pc = socket.gethostname()
-    last_push = 0.0
-    last_id = None
-    while True:
-        try:
-            if time.monotonic() - last_push >= CLOUD_PUSH_S:
-                cloud_request("/api/push", {"pc": pc, "stats": stats_snapshot()})
-                last_push = time.monotonic()
-            cmd = cloud_request("/api/poll?pc=" + urllib.parse.quote(pc))
-            rid = cmd.get("id")
-            if rid and rid != last_id:
-                last_id = rid
-                try:
-                    kind = cmd.get("type")
-                    if kind == "list":
-                        result = {"id": rid, "list": list_folder(cmd.get("path", ""))}
-                    elif kind == "download":
-                        result = {"id": rid, "file": download_file(cmd.get("path", ""))}
-                    else:
-                        result = {"id": rid, "image": capture_screen_jpeg_b64()}
-                except Exception as e:
-                    result = {"id": rid, "error": str(e)[:200]}
-                cloud_request("/api/result", result, timeout=120)
-        except Exception:
-            pass  # absurdKm continue de compter même si le serveur ne répond pas
-        time.sleep(CLOUD_POLL_S)
-# ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 hid = ctypes.WinDLL("hid")
@@ -537,7 +351,6 @@ def dark_titlebar(win, dark=True):
     except Exception:
         pass
 
-# ------------------------- dessin : coins arrondis -------------------------
 def rrect(cv, x0, y0, x1, y1, r, **kw):
     """Rectangle à coins arrondis (polygone lissé)."""
     pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
@@ -582,7 +395,6 @@ class Pill(tk.Canvas):
             self.hov = hover
         self._draw(self.bgc)
 
-# ------------------------- icône -------------------------
 def icon_pixels(n=32):
     rows = []
     r, m = 7.0, 2.0
@@ -642,7 +454,6 @@ class Tray:
 TRAY = Tray()
 CMDS = queue.Queue()
 
-# ------------------------- lecture du pavé -------------------------
 class Device:
     def __init__(self, hdev):
         sz = w.UINT(0)
@@ -791,7 +602,6 @@ class Tracker:
 
 T = Tracker()
 
-# ------------------------- souris (distance, données brutes) -------------------------
 class MouseTracker:
     """Mesure la distance de la souris à partir des mouvements bruts (raw input).
     Ces valeurs ne dépendent ni de la sensibilité du pointeur ni de l'accélération Windows ;
@@ -803,8 +613,6 @@ class MouseTracker:
         self.session = 0.0
 
     def feed(self, dx, dy):
-        # Pendant un contact sur le pavé, on ignore : certains pavés tactiles
-        # envoient aussi des mouvements en « souris » et on compterait deux fois.
         if T.paused or time.monotonic() - PAD_LAST < PAD_QUIET_S:
             return
         n = math.hypot(dx, dy)
@@ -824,7 +632,6 @@ class MouseTracker:
 
 MT = MouseTracker()
 
-# ------------------------- molette (souris uniquement) -------------------------
 def on_wheel(delta):
     if time.monotonic() - PAD_LAST < PAD_QUIET_S:
         return
@@ -846,16 +653,16 @@ def on_input(lp, devices):
     if user32.GetRawInputData(lp, 0x10000003, buf, ctypes.byref(size), hdr) != size.value:
         return
     h = RAWINPUTHEADER.from_buffer(buf)
-    if h.dwType == 0:  # RIM_TYPEMOUSE
+    if h.dwType == 0:
         usflags = struct.unpack_from("<H", buf, hdr)[0]
         flags, delta = struct.unpack_from("<Hh", buf, hdr + 4)
-        if flags & 0x0400:  # RI_MOUSE_WHEEL
+        if flags & 0x0400:
             on_wheel(delta)
-        if not (usflags & 0x01):  # 0x01 = position absolue (tablette, bureau distant) : ignoré
+        if not (usflags & 0x01):
             dx, dy = struct.unpack_from("<ii", buf, hdr + 12)
             MT.feed(dx, dy)
         return
-    if h.dwType != 2:  # RIM_TYPEHID : pavé
+    if h.dwType != 2:
         return
     size_hid, count = struct.unpack_from("<II", buf, hdr)
     base = hdr + 8
@@ -919,15 +726,14 @@ def raw_loop():
     user32.RegisterClassW(ctypes.byref(wc))
     hwnd = user32.CreateWindowExW(0, "absurdeKmRaw", "x", 0, 0, 0, 0, 0, None, None, wc.hInstance, None)
     TRAY.add(hwnd)
-    devs = (RAWINPUTDEVICE * 2)(RAWINPUTDEVICE(0x0D, 0x05, 0x100, hwnd),   # pavé tactile
-                                RAWINPUTDEVICE(0x01, 0x02, 0x100, hwnd))   # souris (molette + distance)
+    devs = (RAWINPUTDEVICE * 2)(RAWINPUTDEVICE(0x0D, 0x05, 0x100, hwnd),
+                                RAWINPUTDEVICE(0x01, 0x02, 0x100, hwnd))
     user32.RegisterRawInputDevices(devs, 2, ctypes.sizeof(RAWINPUTDEVICE))
     msg = w.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         user32.TranslateMessage(ctypes.byref(msg))
         user32.DispatchMessageW(ctypes.byref(msg))
 
-# ------------------------- fenêtre -------------------------
 class App:
     TABS = ("Pavé", "Souris", "Molette", "Shorts")
     W_BASE = 440
@@ -974,7 +780,6 @@ class App:
         if hidden:
             r.withdraw()
         threading.Thread(target=raw_loop, daemon=True).start()
-        threading.Thread(target=cloud_loop, daemon=True, name="cloud").start()
         self.tick()
         self.detect_short()
         r.after(15000, self.auto_check)
@@ -983,7 +788,6 @@ class App:
         self.root.update_idletasks()
         self.root.geometry(f"{int(self.W_BASE * self.sc)}x{self.root.winfo_reqheight()}")
 
-    # ---------------------------------------------------------- style --
     def setup_style(self):
         st = ttk.Style()
         st.theme_use("clam")
@@ -1051,7 +855,6 @@ class App:
         except ValueError:
             return default
 
-    # ---------------------------------------------------------- UI --
     def build(self):
         r = self.root
         r.configure(bg=C["bg"])
@@ -1245,7 +1048,6 @@ class App:
         rr.pack(fill="x", padx=16, pady=(8, 0))
         self.pill(rr, "Remettre à zéro", self.reset_shorts).pack(side="left")
 
-    # ---------------------------------------------------- notification unique (pause / reprise) --
     def build_overlay(self):
         self.TW = int(240 * self.sc)
         self.TH = int(58 * self.sc)
@@ -1254,7 +1056,7 @@ class App:
         self.ov.overrideredirect(True)
         self.ov.attributes("-topmost", True)
         self.ov.configure(bg=TRANS)
-        self.ov.attributes("-transparentcolor", TRANS)  # coins arrondis réellement transparents
+        self.ov.attributes("-transparentcolor", TRANS)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         self.ov.geometry(f"{self.TW}x{self.TH}+{(sw - self.TW) // 2}+{int(sh * 0.10)}")
@@ -1305,7 +1107,6 @@ class App:
         self.ov.attributes("-alpha", 0.96 * (1 - p))
         self._job = self.root.after(15, self._fade, t0)
 
-    # ---------------------------------------------------- thème --
     def cycle_theme(self):
         global C
         i = THEME_ORDER.index(CFG["theme"])
@@ -1333,7 +1134,6 @@ class App:
         dark_titlebar(self.root, CFG["theme"] == "Sombre")
         self.refresh()
 
-    # ---------------------------------------------------- affichage --
     def refresh(self):
         unit = CFG["unit"]
         v, u = convert(CFG["total_cm"], unit)
@@ -1345,7 +1145,6 @@ class App:
         self.sess.config(text=f"{fmt(v)} {u}")
         self.cal_info.config(text=T.info())
 
-        # onglet Souris
         v, u = convert(CFG["mouse_total_cm"], unit)
         self.m_big.config(text=fmt(v))
         self.m_bigu.config(text=u)
@@ -1390,7 +1189,6 @@ class App:
         CFG["min_seconds"] = self._num(self.e_min, 2, allow_zero=True)
         CFG["keywords"] = self.e_kw.get()
 
-    # ---------------------------------------------------- détection des shorts --
     def detect_short(self):
         now = time.monotonic()
         title = re.sub(r"^\(\d+\)\s*", "", foreground_title()).strip()
@@ -1422,7 +1220,6 @@ class App:
                 self.detect_msg = f"⏳ {name} ({left:.1f} s)"
         self.root.after(250, self.detect_short)
 
-    # ---------------------------------------------------- actions --
     def toggle(self):
         T.paused = not T.paused
         T.last = {}
@@ -1603,7 +1400,6 @@ class App:
         dark_titlebar(win, CFG["theme"] == "Sombre")
         upd()
 
-    # ---------------------------------------------------- mise à jour automatique --
     def auto_check(self):
         check_updates()
         self.root.after(5 * 60 * 1000, self.auto_check)
@@ -1619,7 +1415,6 @@ class App:
             return True
         return False
 
-    # ---------------------------------------------------- fenêtre et cycle de vie --
     def hide(self):
         self.sync()
         save_cfg()
@@ -1650,7 +1445,6 @@ class App:
             self.toggle()
         self._was_down = bool(down)
 
-        # Espace : termine la calibration de la souris si elle est en cours
         space = user32.GetAsyncKeyState(0x20) & 0x8000
         if space and not self._space_was_down and MT.cal:
             self.toggle_mouse_calib()
