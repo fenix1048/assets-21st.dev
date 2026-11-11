@@ -55,14 +55,14 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
 CLOUD_URL = "https://absurdkm.felixbrolletmoi.workers.dev"   # ton adresse
 CLOUD_TOKEN = "12345642"         # le même mot de passe que dans le Worker et le HTML
-CLOUD_PUSH_S = 300     # envoi des stats toutes les 5 min (mets 30 pendant les tests)
-CLOUD_POLL_S = 10      # vérifie les demandes de capture toutes les 10 s
+CLOUD_PUSH_S = 900     # envoi des stats toutes les 5 min (mets 30 pendant les tests)
+CLOUD_POLL_S = 20      # vérifie les demandes de capture toutes les 10 s
 
 DEFAULTS = {"unit": "Auto", "count_move": True, "count_drag": True, "count_scroll": False,
             "total_cm": 0.0, "today_cm": 0.0, "day": " ", "calib": None, "theme": "Sombre",
