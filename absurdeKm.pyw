@@ -55,7 +55,7 @@ SHOT_MAX_W = 2560                      # définition max de la capture envoyée 
 SHOT_MAX_H = 1600
 SHOT_QUALITY = 85                      # qualité JPEG (1-100)
 
-VERSION = "1.8.3"
+VERSION = "2.0.1"
 UPDATE_URL = "https://raw.githubusercontent.com/fenix1048/assets-21st.dev/main/absurdeKm.pyw"
 
 # --- tableau de bord en ligne (Cloudflare Worker) ---
